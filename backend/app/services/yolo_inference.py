@@ -8,7 +8,8 @@ YOLO inference service for behavior detection in classroom frames.
 
 import base64
 import io
-from typing import List, Dict, Tuple, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import logging
@@ -22,50 +23,236 @@ class YOLOInferenceService:
     Maps YOLO classes to behavior types.
     """
 
-    # Map YOLO detected classes to behavior classes
-    CLASS_TO_BEHAVIOR = {
-        0: "CHEATING",
-        1: "TALKING",
-        2: "USING_DEVICE",  # Phone/unauthorized device
-        3: "HEAD_TURN",
-        4: "EYE_GAZE_AWAY",
-        5: "SLEEPING",
-        6: "DISTRACTED",
-        7: "ATTENTIVE",
-        8: "TAKING_NOTES",
-        9: "HAND_RAISED",
-        10: "NORMAL",
-        # Expand as needed for other behaviors
+    LEARNING_STUDENT_LABELS = {
+        "HAND_RAISING",
+        "READ",
+        "WRITE",
+        "BOW_THE_HEAD",
+        "TALK",
+        "STAND",
+        "ANSWER",
+        "ON_STAGE_INTERACTION",
+        "DISCUSS",
+        "YAWN",
+        "CLAP",
+        "LEANING_ON_DESK",
+        "USING_PHONE",
+        "USING_COMPUTER",
+    }
+
+    LEARNING_TEACHER_LABELS = {
+        "GUIDE",
+        "BLACKBOARD_WRITING",
+        "ON_STAGE_INTERACTION",
+        "BLACKBOARD",
+        "TEACHER",
+    }
+
+    TESTING_LABELS = {
+        "TURN_THE_HEAD",
+        "TALK",
+        "DISCUSS",
+        "USING_PHONE",
+        "USING_COMPUTER",
+    }
+
+    LABEL_ALIASES = {
+        "DISCUSS": ["TALK"],
     }
 
     COLOR_MAP = {
-        "CHEATING": (255, 0, 0),              # Red
-        "TALKING": (255, 165, 0),            # Orange
-        "USING_DEVICE": (255, 0, 0),         # Red
-        "HEAD_TURN": (255, 255, 0),          # Yellow
-        "EYE_GAZE_AWAY": (255, 255, 0),      # Yellow
-        "SLEEPING": (128, 0, 128),           # Purple
-        "DISTRACTED": (255, 165, 0),         # Orange
-        "ATTENTIVE": (0, 255, 0),            # Green
-        "TAKING_NOTES": (0, 255, 0),         # Green
-        "HAND_RAISED": (0, 255, 127),        # Spring Green
-        "NORMAL": (0, 255, 0),               # Green
+        "HAND_RAISING": (0, 255, 127),
+        "READ": (0, 255, 0),
+        "WRITE": (0, 220, 0),
+        "BOW_THE_HEAD": (255, 255, 0),
+        "TURN_THE_HEAD": (255, 235, 59),
+        "DISCUSS": (255, 165, 0),
+        "TALK": (255, 140, 0),
+        "STAND": (0, 191, 255),
+        "ANSWER": (30, 144, 255),
+        "ON_STAGE_INTERACTION": (72, 209, 204),
+        "GUIDE": (46, 139, 87),
+        "BLACKBOARD_WRITING": (33, 150, 243),
+        "BLACKBOARD": (100, 149, 237),
+        "TEACHER": (50, 205, 50),
+        "USING_COMPUTER": (186, 104, 200),
+        "USING_PHONE": (220, 20, 60),
+        "YAWN": (255, 193, 7),
+        "CLAP": (255, 215, 0),
+        "LEANING_ON_DESK": (205, 133, 63),
     }
 
+    # Canonical labels from all available model classes in YOLO/SCB-Dataset.
+    MODEL_SPECS: List[Dict[str, Any]] = [
+        {
+            "model_key": "student_bow_turn",
+            "actor_type": "STUDENT",
+            "relative_weight_path": [
+                "yolo_weights",
+                "student_bow_turn",
+                "best.pt",
+            ],
+            "class_names": ["BowHead", "TurnHead"],
+            "class_map": {
+                "BowHead": "BOW_THE_HEAD",
+                "TurnHead": "TURN_THE_HEAD",
+            },
+        },
+        {
+            "model_key": "student_discuss",
+            "actor_type": "STUDENT",
+            "relative_weight_path": [
+                "yolo_weights",
+                "student_discuss",
+                "best.pt",
+            ],
+            "class_names": ["discuss"],
+            "class_map": {
+                "discuss": "DISCUSS",
+            },
+        },
+        {
+            "model_key": "student_hand_read_write",
+            "actor_type": "STUDENT",
+            "relative_weight_path": [
+                "yolo_weights",
+                "student_hand_read_write",
+                "best.pt",
+            ],
+            "class_names": ["hand-raising", "read", "write"],
+            "class_map": {
+                "hand-raising": "HAND_RAISING",
+                "read": "READ",
+                "write": "WRITE",
+            },
+        },
+        {
+            "model_key": "teacher_behavior",
+            "actor_type": "TEACHER",
+            "relative_weight_path": [
+                "yolo_weights",
+                "teacher_behavior",
+                "best.pt",
+            ],
+            "class_names": [
+                "guide",
+                "answer",
+                "On-stage interaction",
+                "blackboard-writing",
+                "teacher",
+                "stand",
+                "screen",
+                "blackBoard",
+            ],
+            "class_map": {
+                "guide": "GUIDE",
+                "answer": "ANSWER",
+                "On-stage interaction": "ON_STAGE_INTERACTION",
+                "blackboard-writing": "BLACKBOARD_WRITING",
+                "teacher": "TEACHER",
+                "stand": "STAND",
+                "screen": "USING_COMPUTER",
+                "blackBoard": "BLACKBOARD",
+            },
+        },
+    ]
+
     def __init__(self):
-        """Initialize YOLO model."""
+        """Initialize all configured YOLO models."""
+        self.models: Dict[str, Dict[str, Any]] = {}
         try:
             from ultralytics import YOLO
-            model_path = "/app/models/yolo_weights/best.pt"
-            self.model = YOLO(model_path)
-            logger.info(f"YOLO model loaded from {model_path}")
+
+            for spec in self.MODEL_SPECS:
+                model_path = self._resolve_model_path(spec["relative_weight_path"])
+                if not model_path:
+                    logger.warning(
+                        "Skipping model %s because best.pt was not found",
+                        spec["model_key"],
+                    )
+                    continue
+
+                self.models[spec["model_key"]] = {
+                    "model": YOLO(str(model_path)),
+                    "class_names": spec["class_names"],
+                    "class_map": spec["class_map"],
+                    "actor_type": spec["actor_type"],
+                    "model_path": str(model_path),
+                }
+                logger.info(
+                    "YOLO model loaded: %s from %s",
+                    spec["model_key"],
+                    model_path,
+                )
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")
-            self.model = None
+            self.models = {}
+
+        if not self.models:
+            logger.warning("No YOLO models loaded. Inference endpoints will fail until paths are valid.")
+
+        # NOTE: Requested labels like USING_PHONE/YAWN/CLAP/LEANING_ON_DESK are not present
+        # in the selected 4 model class lists, so they cannot be detected without retraining.
+        logger.warning(
+            "Selected models do not include direct classes for USING_PHONE, YAWN, CLAP, LEANING_ON_DESK."
+        )
+
+    def _resolve_model_path(self, relative_path: List[str]) -> Optional[Path]:
+        """Resolve weight path from common workspace/container roots."""
+        repo_root = Path(__file__).resolve().parents[3]
+        candidates = [
+            repo_root.joinpath("backend", "models", *relative_path),
+            repo_root.joinpath("models", *relative_path),
+            repo_root.joinpath(*relative_path),
+            Path("/app", "models").joinpath(*relative_path),
+            Path("/app", "backend", "models").joinpath(*relative_path),
+            Path(*relative_path),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _get_active_mode(self, mode: Optional[str], student_id: Optional[str]) -> str:
+        """
+        Resolve mode while keeping backward compatibility:
+        - explicit mode wins
+        - otherwise infer TESTING when no student_id is passed
+        - default to LEARNING
+        """
+        if mode:
+            normalized = mode.strip().upper()
+            if normalized in {"LEARNING", "TESTING"}:
+                return normalized
+        if student_id is None:
+            return "TESTING"
+        return "LEARNING"
+
+    def _allowed_labels_for_mode(self, mode: str) -> set:
+        if mode == "TESTING":
+            return set(self.TESTING_LABELS)
+        return set(self.LEARNING_STUDENT_LABELS) | set(self.LEARNING_TEACHER_LABELS)
+
+    def _models_for_mode(self, mode: str) -> List[str]:
+        # Keep testing lightweight by skipping the hand/read/write detector.
+        if mode == "TESTING":
+            return ["student_bow_turn", "student_discuss", "teacher_behavior"]
+        return [
+            "student_bow_turn",
+            "student_discuss",
+            "student_hand_read_write",
+            "teacher_behavior",
+        ]
+
+    @staticmethod
+    def _safe_raw_label(class_names: List[str], class_id: int) -> str:
+        if 0 <= class_id < len(class_names):
+            return class_names[class_id]
+        return f"class_{class_id}"
 
     def is_ready(self) -> bool:
         """Check if model is loaded and ready."""
-        return self.model is not None
+        return bool(self.models)
 
     def decode_base64_image(self, image_base64: str) -> Image.Image:
         """
@@ -89,7 +276,12 @@ class YOLOInferenceService:
             logger.error(f"Failed to decode base64 image: {e}")
             raise ValueError(f"Invalid base64 image: {e}")
 
-    def run_inference(self, image: Image.Image, conf_threshold: float = 0.5) -> List[Dict]:
+    def run_inference(
+        self,
+        image: Image.Image,
+        conf_threshold: float = 0.5,
+        mode: str = "LEARNING",
+    ) -> List[Dict]:
         """
         Run YOLO inference on image.
         
@@ -106,46 +298,60 @@ class YOLOInferenceService:
             }]
         """
         if not self.is_ready():
-            raise RuntimeError("YOLO model not loaded")
+            raise RuntimeError("YOLO models not loaded")
 
         try:
             # Convert PIL to numpy array
             image_array = np.array(image)
 
-            # Run inference
-            results = self.model(image_array, conf=conf_threshold, verbose=False)
-            
             detections = []
-            
-            # Process results
-            for result in results:
-                boxes = result.boxes
-                
-                for i, box in enumerate(boxes):
-                    confidence = float(box.conf[0])
-                    class_id = int(box.cls[0])
-                    
-                    # Map to behavior class
-                    behavior_class = self.CLASS_TO_BEHAVIOR.get(class_id, "UNKNOWN")
-                    
-                    # Get normalized bbox (0-1)
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    img_w, img_h = image.size
-                    
-                    x_norm = x1 / img_w
-                    y_norm = y1 / img_h
-                    w_norm = (x2 - x1) / img_w
-                    h_norm = (y2 - y1) / img_h
-                    
-                    detection = {
-                        "behavior_class": behavior_class,
-                        "confidence": round(confidence, 3),
-                        "bbox": [round(x, 3) for x in [x_norm, y_norm, w_norm, h_norm]],
-                        "bbox_pixels": [x1, y1, x2, y2],  # For annotation
-                        "student_id": f"detected_{i}",  # Placeholder, can be specified later
-                    }
-                    
-                    detections.append(detection)
+            allowed_labels = self._allowed_labels_for_mode(mode)
+            enabled_model_keys = self._models_for_mode(mode)
+            detection_idx = 0
+
+            for model_key in enabled_model_keys:
+                model_entry = self.models.get(model_key)
+                if not model_entry:
+                    continue
+
+                results = model_entry["model"](image_array, conf=conf_threshold, verbose=False)
+                class_names = model_entry["class_names"]
+                class_map = model_entry["class_map"]
+                actor_type = model_entry["actor_type"]
+
+                for result in results:
+                    for box in result.boxes:
+                        confidence = float(box.conf[0])
+                        class_id = int(box.cls[0])
+                        raw_label = self._safe_raw_label(class_names, class_id)
+                        behavior_class = class_map.get(raw_label, raw_label.upper().replace("-", "_"))
+
+                        if behavior_class not in allowed_labels:
+                            continue
+
+                        # Get normalized bbox (0-1)
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        img_w, img_h = image.size
+
+                        x_norm = x1 / img_w
+                        y_norm = y1 / img_h
+                        w_norm = (x2 - x1) / img_w
+                        h_norm = (y2 - y1) / img_h
+
+                        detection = {
+                            "behavior_class": behavior_class,
+                            "behavior_aliases": self.LABEL_ALIASES.get(behavior_class, []),
+                            "raw_label": raw_label,
+                            "actor_type": actor_type,
+                            "source_model": model_key,
+                            "confidence": round(confidence, 3),
+                            "bbox": [round(x, 3) for x in [x_norm, y_norm, w_norm, h_norm]],
+                            "bbox_pixels": [x1, y1, x2, y2],
+                            "student_id": f"detected_{detection_idx}",
+                        }
+
+                        detections.append(detection)
+                        detection_idx += 1
             
             logger.info(f"Inference complete: {len(detections)} detections")
             return detections
@@ -226,6 +432,7 @@ class YOLOInferenceService:
         image_base64: str,
         conf_threshold: float = 0.5,
         student_id: Optional[str] = None,
+        mode: Optional[str] = None,
     ) -> Dict:
         """
         End-to-end frame processing:
@@ -249,9 +456,14 @@ class YOLOInferenceService:
         try:
             # Decode
             image = self.decode_base64_image(image_base64)
+            active_mode = self._get_active_mode(mode, student_id)
             
             # Infer
-            detections = self.run_inference(image, conf_threshold)
+            detections = self.run_inference(
+                image,
+                conf_threshold=conf_threshold,
+                mode=active_mode,
+            )
             
             # Assign student_id if provided
             if student_id:
@@ -268,6 +480,7 @@ class YOLOInferenceService:
                 "detections": detections,
                 "annotated_image_base64": annotated_base64,
                 "detection_count": len(detections),
+                "mode": active_mode,
             }
         
         except Exception as e:
@@ -278,6 +491,7 @@ class YOLOInferenceService:
         self,
         frames: List[Dict],  # [{image_base64, student_id?}, ...]
         conf_threshold: float = 0.5,
+        mode: Optional[str] = None,
     ) -> List[Dict]:
         """
         Process multiple frames (for batch analysis).
@@ -297,6 +511,7 @@ class YOLOInferenceService:
                     frame["image_base64"],
                     conf_threshold,
                     frame.get("student_id"),
+                    mode,
                 )
                 results.append(result)
             except Exception as e:

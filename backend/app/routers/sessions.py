@@ -175,7 +175,8 @@ async def ingest_learning_mode(
         frame_result = yolo_service.process_frame(
             behavior.image_base64,
             conf_threshold=behavior.confidence_threshold,
-            student_id=behavior.student_id
+            student_id=behavior.student_id,
+            mode="LEARNING",
         )
         
         if not yolo_service.is_ready():
@@ -284,7 +285,8 @@ async def ingest_testing_mode(
         frame_result = yolo_service.process_frame(
             behavior.image_base64,
             conf_threshold=behavior.confidence_threshold,
-            student_id=None  # Will be assigned from face detection
+            student_id=None,  # Will be assigned from face detection
+            mode="TESTING",
         )
         
         # Store detection logs

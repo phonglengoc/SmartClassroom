@@ -125,18 +125,39 @@ class RiskDetector:
     """
 
     RISK_WEIGHTS = {
-        "DEVICE_USAGE": 0.4,      # Highest priority
-        "TALKING": 0.3,            # Medium priority
-        "HEAD_TURN": 0.2,           # Lower priority
-        "CHEATING": 0.4,            # Same as device
-        "UNAUTHORIZED_OBJECT": 0.35, # High priority
-        "EYE_GAZE_AWAY": 0.1,      # Lowest priority
+        # Testing mode target labels
+        "USING_PHONE": 0.4,
+        "USING_COMPUTER": 0.35,
+        "TALK": 0.3,
+        "DISCUSS": 0.3,
+        "TURN_THE_HEAD": 0.2,
+
+        # Backward compatibility for older label names
+        "DEVICE_USAGE": 0.4,
+        "USING_DEVICE": 0.4,
+        "CHEATING": 0.4,
+        "UNAUTHORIZED_OBJECT": 0.35,
+        "TALKING": 0.3,
+        "HEAD_TURN": 0.2,
+        "EYE_GAZE_AWAY": 0.1,
+    }
+
+    BEHAVIOR_ALIASES = {
+        "TURN_HEAD": "TURN_THE_HEAD",
+        "HEAD_TURN": "TURN_THE_HEAD",
+        "TALKING": "TALK",
+        "DEVICE_USAGE": "USING_PHONE",
+        "USING_DEVICE": "USING_PHONE",
     }
 
     RISK_THRESHOLD = 0.65  # Trigger incident if risk > 65%
 
     def __init__(self, db: Session):
         self.db = db
+
+    def normalize_behavior(self, behavior_class: str) -> str:
+        """Normalize behavior names to canonical scoring labels."""
+        return self.BEHAVIOR_ALIASES.get(behavior_class, behavior_class)
 
     def calculate_risk(
         self,
@@ -159,7 +180,8 @@ class RiskDetector:
         total_weight = 0.0
 
         for behavior_class, count in behaviors.items():
-            weight = self.RISK_WEIGHTS.get(behavior_class, 0.0)
+            normalized_behavior = self.normalize_behavior(behavior_class)
+            weight = self.RISK_WEIGHTS.get(normalized_behavior, 0.0)
             if weight > 0:
                 # Normalize by count (more instances = higher risk)
                 normalized = min(1.0, count / 5.0)  # 5+ instances = max risk
@@ -236,7 +258,7 @@ class RiskDetector:
 
         for behavior in detected_behaviors:
             student_id = behavior["student_id"]
-            behavior_class = behavior["behavior_class"]
+            behavior_class = self.normalize_behavior(behavior["behavior_class"])
             confidence = behavior.get("confidence", 0.8)
 
             if confidence > 0.5:  # Only count confident detections
