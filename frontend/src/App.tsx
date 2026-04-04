@@ -1,15 +1,18 @@
 import type { JSX } from 'react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter as Router, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import './App.css'
 import { BuildingsOverviewPage } from './pages/BuildingsOverviewPage'
 import { BuildingGroupPage } from './pages/BuildingGroupPage'
 import { BuildingDashboardPage } from './pages/BuildingDashboardPage'
+import { AdminSettingsPage } from './pages/AdminSettingsPage'
 import { SessionDetailPage } from './pages/SessionDetailPage'
 import { StudentDashboardPage } from './pages/StudentDashboardPage'
+import { StudentSessionPage } from './pages/StudentSessionPage'
 import { LoginPage } from './pages/LoginPage'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { useAuthStore } from './store/auth'
+import { getTutorRoomContext } from './services/api'
 import { getCurrentPermissions, getCurrentUser, logout } from './services/auth'
 
 function AuthenticatedLayout(): JSX.Element {
@@ -69,6 +72,7 @@ function AuthenticatedLayout(): JSX.Element {
   }
 
   const showBack = location.pathname !== '/'
+  const isSystemAdmin = user?.role === 'SYSTEM_ADMIN'
 
   return (
     <>
@@ -85,6 +89,15 @@ function AuthenticatedLayout(): JSX.Element {
               </button>
             ) : null}
             <p className="auth-user">Signed in as {user?.username ?? 'Unknown'}</p>
+            {isSystemAdmin ? (
+              <button
+                type="button"
+                className="inline-link inline-link-button auth-topbar-back"
+                onClick={() => navigate('/admin/settings')}
+              >
+                Admin Settings
+              </button>
+            ) : null}
           </div>
           <button type="button" onClick={handleLogout}>
             Sign Out
@@ -103,6 +116,49 @@ function HomeRoute(): JSX.Element {
     return <Navigate to="/students/me/dashboard" replace />
   }
 
+  if (user?.role === 'LECTURER' || user?.role === 'EXAM_PROCTOR') {
+    return <ScopedClassroomHomeRoute />
+  }
+
+  return <BuildingsOverviewPage />
+}
+
+function ScopedClassroomHomeRoute(): JSX.Element {
+  const [targetBuildingId, setTargetBuildingId] = useState<string | null | undefined>(undefined)
+
+  useEffect(() => {
+    let isMounted = true
+
+    async function resolveTutorBuilding(): Promise<void> {
+      try {
+        const context = await getTutorRoomContext()
+        if (!isMounted) return
+        setTargetBuildingId(context.building_id)
+      } catch {
+        if (!isMounted) return
+        setTargetBuildingId(null)
+      }
+    }
+
+    void resolveTutorBuilding()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  if (targetBuildingId === undefined) {
+    return (
+      <main className="page">
+        <section className="panel">Resolving assigned classroom...</section>
+      </main>
+    )
+  }
+
+  if (targetBuildingId) {
+    return <Navigate to={`/buildings/${targetBuildingId}`} replace />
+  }
+
   return <BuildingsOverviewPage />
 }
 
@@ -117,8 +173,10 @@ function App() {
             <Route path="/" element={<HomeRoute />} />
             <Route path="/building-groups/:groupKey" element={<BuildingGroupPage />} />
             <Route path="/buildings/:buildingId" element={<BuildingDashboardPage />} />
+            <Route path="/admin/settings" element={<AdminSettingsPage />} />
             <Route path="/sessions/:sessionId" element={<SessionDetailPage />} />
             <Route path="/students/me/dashboard" element={<StudentDashboardPage />} />
+            <Route path="/students/me/sessions/:sessionId" element={<StudentSessionPage />} />
           </Route>
         </Route>
 

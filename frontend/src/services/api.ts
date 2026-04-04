@@ -1,5 +1,12 @@
 import axios, { AxiosError } from 'axios'
 import type {
+  BuildingRefreshIntervalConfig,
+  CurrentSessionTarget,
+  RefreshIntervalEffective,
+  RefreshIntervalGroupListResponse,
+  RefreshIntervalMode,
+  RoomRefreshIntervalConfig,
+  TutorRoomContext,
   AttendanceConfigPayload,
   AttendanceDailyRoomSummary,
   AttendanceHistoryEntry,
@@ -103,6 +110,117 @@ export async function getSessions(params?: {
 }): Promise<SessionSummary[]> {
   try {
     const { data } = await api.get<SessionSummary[]>('/sessions', { params })
+    return data
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function getEffectiveRefreshInterval(
+  buildingId: string,
+  mode: RefreshIntervalMode,
+  roomId?: string,
+): Promise<RefreshIntervalEffective> {
+  try {
+    const params = roomId ? { building_id: buildingId, mode, room_id: roomId } : { building_id: buildingId, mode }
+    const { data } = await api.get<RefreshIntervalEffective>('/refresh-intervals/effective', { params })
+    return data
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function getRefreshIntervalGroups(): Promise<RefreshIntervalGroupListResponse> {
+  try {
+    const { data } = await api.get<RefreshIntervalGroupListResponse>('/admin/refresh-intervals/groups')
+    return data
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function updateRefreshIntervalGroup(
+  groupCode: 'A' | 'B' | 'C' | 'LABS',
+  mode: RefreshIntervalMode,
+  intervalMs: number,
+): Promise<void> {
+  try {
+    await api.put(`/admin/refresh-intervals/groups/${groupCode}/${mode}`, { interval_ms: intervalMs })
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function getBuildingRefreshIntervalConfig(buildingId: string): Promise<BuildingRefreshIntervalConfig> {
+  try {
+    const { data } = await api.get<BuildingRefreshIntervalConfig>(`/admin/refresh-intervals/buildings/${buildingId}`)
+    return data
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function updateBuildingRefreshInterval(
+  buildingId: string,
+  mode: RefreshIntervalMode,
+  intervalMs: number,
+): Promise<void> {
+  try {
+    await api.put(`/admin/refresh-intervals/buildings/${buildingId}/${mode}`, { interval_ms: intervalMs })
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function resetBuildingRefreshInterval(buildingId: string, mode: RefreshIntervalMode): Promise<void> {
+  try {
+    await api.delete(`/admin/refresh-intervals/buildings/${buildingId}/${mode}`)
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function getRoomRefreshIntervalConfig(roomId: string): Promise<RoomRefreshIntervalConfig> {
+  try {
+    const { data } = await api.get<RoomRefreshIntervalConfig>(`/admin/refresh-intervals/rooms/${roomId}`)
+    return data
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function updateRoomRefreshInterval(
+  roomId: string,
+  mode: RefreshIntervalMode,
+  intervalMs: number,
+): Promise<void> {
+  try {
+    await api.put(`/admin/refresh-intervals/rooms/${roomId}/${mode}`, { interval_ms: intervalMs })
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function resetRoomRefreshInterval(roomId: string, mode: RefreshIntervalMode): Promise<void> {
+  try {
+    await api.delete(`/admin/refresh-intervals/rooms/${roomId}/${mode}`)
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function getCurrentSessionTarget(): Promise<CurrentSessionTarget> {
+  try {
+    const { data } = await api.get<CurrentSessionTarget>('/sessions/me/current')
+    return data
+  } catch (error) {
+    throw new Error(normalizeApiError(error))
+  }
+}
+
+export async function getTutorRoomContext(): Promise<TutorRoomContext> {
+  try {
+    const { data } = await api.get<TutorRoomContext>('/sessions/me/room-context')
     return data
   } catch (error) {
     throw new Error(normalizeApiError(error))
